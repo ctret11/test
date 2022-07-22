@@ -63,6 +63,8 @@ class MechaAutoshipExampleNode(Node):
         self.set_pixel(255, 0, 0)
         time.sleep(3)
         self.set_pixel(100, 100, 100)  # 기본 상태로 복귀
+    def shape_sub_callback(self, data):
+        self.data["Shape"] = data
 
     def imu_sub_callback(self, data):
         self.data["IMU"] = data
@@ -72,9 +74,10 @@ class MechaAutoshipExampleNode(Node):
 
     def lidar_sub_callback(self, data):
         self.data["LiDAR"] = data
+    
         
-    def shape_sub_callback(self,data):
-		self.data["Shape"] = data
+    
+    
 
     # def print_imu_data_example_callback(self):
         # """특정 토픽으로부터 데이터를 가져오는 예시입니다. 여기서는 imu/data_raw의 orientation 데이터를 출력하고 있습니다."""
