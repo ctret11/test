@@ -120,7 +120,7 @@ class MechaAutoshipImageColorFilter(Node):
         self.publishers_ = self.create_publisher(String,"shape",1)
         time_period = 0.1
         self.timer = self.create_timer(time_period,self.timer_callback)
-        self.count
+        self.count = 0
         self.origin_img = []
 
     def listener_callback(self, data):
