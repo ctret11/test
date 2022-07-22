@@ -1,7 +1,8 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from sensor_msgs.msg import Image, RegionOfInterest, String
+from sensor_msgs.msg import Image, RegionOfInterest
+from std_msgs.msg import String
 import cv2
 from cv_bridge import CvBridge
 import math
