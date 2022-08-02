@@ -13,7 +13,10 @@ import cv2
 
 from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus, PointCloud, LaserScan
 from mecha_autoship_interfaces.srv import Battery, Actuator, Color
-
+from adafruit_servokit import ServoKit
+import board
+import busio
+import serial
 
 def map(x, input_min, input_max, output_min, output_max):
     res = (x - input_min) * (output_max - output_min) / (
@@ -26,7 +29,14 @@ class MechaAutoshipExampleNode(Node):
     def __init__(self):
         super().__init__("mecha_autoship_example_node")
         self.get_logger().info("mecha_autoship_example_node Start")
-
+        ser = serial.Serial(port = "/dev/ttyACM0", baudrate = 38400, timeout = 0.1)    
+        i2c_bus0 = (busio.I2C(board.SCL_1, board.SDA_1))
+        self.kit = ServoKit(channels=16, i2c=i2c_bus0)
+        self.kit.servo[0].set_pulse_width_range(1000, 2000) # servo 0 - bldc motor
+        self.kit.servo[1].set_pulse_width_range(1000, 2000) # servo 1 - bldc motor
+        self.kit.servo[0].angle = 90 # 
+        self.kit.servo[1].angle = 90 # 
+        
         self.data = {
             "IMU": Imu(),
             "GPS": NavSatFix(),
@@ -55,7 +65,7 @@ class MechaAutoshipExampleNode(Node):
         #self.print_imu_data_example = self.create_timer(
         #    5, self.print_imu_data_example_callback
         #)
-        self.risk_calculator_lidar_data = self.create_timer(1, self.risk_calculator_lidar_data_callback)
+        self.risk_calculator_lidar_data = self.create_timer(2, self.risk_calculator_lidar_data_callback)
         # self.light_timer = self.create_timer(1, self.light_callback)
 
         
@@ -66,12 +76,58 @@ class MechaAutoshipExampleNode(Node):
         # self.set_pixel(100, 100, 100)  # 기본 상태로 복귀
         
         # #모터의 쓰로틀을 100%, 각도를 100도로 설정하는 예시입니다.
-        self.set_motors(150,100)
-        time.sleep(3)
-        self.set_motors(60, 90)  # 기본 상태로 복귀
-        time.sleep(3)
-
         
+
+    def GPSparser(data):
+        gps_data = data.split(b",")
+        idx_rmc = data.find(b'GNGGA')
+        if data[idx_rmc:idx_rmc+5] == b"GNGGA":
+            data = data[idx_rmc:]    
+            if checksum(data):
+                parsed_data = data.split(b",")
+                print(parsed_data)
+                return parsed_data
+            else :
+                print ("checksum error")
+
+    def checksum(sentence):
+        sentence = sentence.strip(b'\n')
+        nmeadata, cksum = sentence.split(b'*',1)
+        calc_cksum = reduce(operator.xor, (ord(chr(s)) for s in nmeadata), 0)
+        print(int(cksum,16), calc_cksum)
+        if int(cksum,16) == calc_cksum:
+            return True 
+        else:
+            return False 
+
+    def Optimal(lat_1,lon_1,lat_2,lon_2):
+        optimal = 199.798876356 - (math.atan((lon_2-lon_1)/(lat_2-lat_1)) * 180 / math.pi +180)
+        print('cool: %f' %(optimal))
+        return optimal
+
+    def location():
+        data = ser.readline()
+        result = collections.defaultdict()
+        res = GPSparser(data)
+        if res == None:
+            return(0,0)
+        else:
+            print(res)
+            lat = str (res[2])
+            lon = str (res[4])
+            if (res == "checksum error"):
+                print("")
+                print(lat)
+            else:
+                lat_h = float(lat[2:4])
+                lon_h = float(lon[2:5])
+                lat_m = float(lat[4:12])
+                lon_m = float(lon[5:13])
+                print('lat_h: %f lon_h: %f lat_m: %f lon_m: %f' %(lat_h, lon_h, lat_m, lon_m))
+                latitude = lat_h + (lat_m/60)
+                longitude = lon_h + (lon_m/60)
+                print('latitude: %f longitude: %f' %(latitude,longitude))
+                
     def shape_sub_callback(self, data):
         self.data["Shape"] = data
 
@@ -89,18 +145,21 @@ class MechaAutoshipExampleNode(Node):
         points_tmp = []
         x_group = []
         y_group = []
-        angle_group = []
         for data_single in self.data["LiDAR"].points :
-            x_group.append(data_single.x)
-            y_group.append(data_single.y)
-            angle_group.append(math.atan2(data_single.y,data_single.x))
+            if data_single.x > 0 and math.sqrt(math.pow(data_single.x,2) + math.pow(data_single.y,2)) < 2.0:
+                x_group.append(data_single.x)
+                y_group.append(data_single.y)
+        # self.get_logger().info(
+                # "x_group: {0}\n".format(
+                    # x_group,
+                    # ))                
         if(len(x_group) != 0):
             point_last_x = x_group[0]
             point_last_y = y_group[0]
             i_end = len(x_group)
             is_end_append = False    
         
-        
+            point_groups.append([[0,1.5]])
             for i in range(1,i_end):
                 point_now_x = x_group[i]
                 point_now_y = y_group[i]
@@ -108,10 +167,10 @@ class MechaAutoshipExampleNode(Node):
                 length_b = point_last_y - point_now_y
                 length_c = math.sqrt((length_a * length_a) + (length_b * length_b))
             
-                if length_c < 0.1 : # 이전 점과 거리가 짧으면 임시 그룹에 넣음
+                if length_c < 0.01 : # 이전 점과 거리가 짧으면 임시 그룹에 넣음
                     points_tmp.append(copy.deepcopy([point_now_x,point_now_y]))
                 else : # 이전 점에서 멀리 떨어져 있으면 다음 그룹의 점으로 간주하고 기존 그룹은 저장
-                    if len(points_tmp) > 3 : # 구성이 10개보다 큰 경우에만 그룹으로 인정
+                    if len(points_tmp) > 10 : # 구성이 10개보다 큰 경우에만 그룹으로 인정
                         if i == i_end - 1 :
                             is_end_append = True
                         point_groups.append(copy.deepcopy(points_tmp))
@@ -120,53 +179,87 @@ class MechaAutoshipExampleNode(Node):
                 point_last_y = copy.deepcopy(point_now_y)
             if len(points_tmp) > 10 and is_end_append == False : # 마지막 그룹까지 계산
                 point_groups.append(copy.deepcopy(points_tmp))
+            point_groups.append([[0,-1.5]])
             
+            # self.get_logger().info(
+                # "point_groups: {0}\n".format(
+                    # point_groups,
+                    # ))    
             
-        front_groups = []
-        front_groups.append([[0,1.5]])
-        for i in range(len(point_groups)):
-            if point_groups[i][0][0] > 0:
-                front_groups.append(point_groups[i])
-        front_groups.append([[0,-1.5]])
+           
+            
                 
-        length = []                            
-        for i in range(len(front_groups) - 2):
-             length.append([math.sqrt(math.pow((front_groups[i][-1][0] - front_groups[i+1][0][0]),2) + math.pow((front_groups[i][-1][1] - front_groups[i+1][0][1]),2)),i])
+            length = []                            
+            for i in range(len(point_groups)-1):
+                 length.append([math.sqrt(math.pow((point_groups[i][-1][0] - point_groups[i+1][0][0]),2) + math.pow((point_groups[i][-1][1] - point_groups[i+1][0][1]),2)),i])
+                 
+            self.get_logger().info(
+                "length: {0}\n".format(
+                    length,
+                    ))     
         
-        can_pass = []
-        for i in range(len(length)):
-            if length[i][0] > 0.7:
-                can_pass.append(length[i][1])
+            can_pass = []
+            for i in range(len(length)):
+                if length[i][0] > 0.7:
+                    can_pass.append(length[i][1])
+            
+            self.get_logger().info(
+                "can_pass: {0}\n".format(
+                    can_pass,
+                    ))
+                    
                 
-        safe_angles = []
-        for i in range(len(can_pass)): 
-            x1 = front_groups[can_pass[i][1]][-1][0]
-            x2 = front_groups[can_pass[i+1][1]][0][0]
-            y1 = front_groups[can_pass[i][1]][-1][1]
-            y2 = front_groups[can_pass[i+1][1]][0][1]
-            x_1 = x1 + (0.35 / length[can_pass[i][1]][0]) * (x2 - x1)
-            y_1 = y1 + (0.35 / length[can_pass[i][1]][0]) * (y2 - y1)
-            x_2 = x2 + (0.35 / length[can_pass[i][1]][0]) * (x2 - x1)
-            y_2 = y2 + (0.35 / length[can_pass[i][1]][0]) * (y2 - y1)
-            safe_angles.append([math.atan2(y_1,x_1),math.atan2(y_2,x_2)])
+            safe_angles = []
+            if len(can_pass) != 1:
+                if can_pass.count(0) == 1:
+                    safe_angles.append([math.atan2(1.5,0)*(180/math.pi) + 90,math.atan2(point_groups[can_pass[1]][0][1],point_groups[can_pass[1]][0][0])*(180/math.pi) + 90])
+                for i in range(1,len(can_pass) - 2): 
+                    if can_pass.count(i) == 1:
+                        x1 = point_groups[can_pass[i]][-1][0]
+                        x2 = point_groups[can_pass[i+1]][0][0]
+                        y1 = point_groups[can_pass[i]][-1][1]
+                        y2 = point_groups[can_pass[i+1]][0][1]
+                        x_1 = x1 + (0.35 / length[can_pass[i]][0]) * (x2 - x1)
+                        y_1 = y1 + (0.35 / length[can_pass[i]][0]) * (y2 - y1)
+                        x_2 = x2 + (0.35 / length[can_pass[i]][0]) * (x2 - x1)
+                        y_2 = y2 + (0.35 / length[can_pass[i]][0]) * (y2 - y1)
+                        safe_angles.append([math.atan2(y_1,x_1)*(180/math.pi) + 90,math.atan2(y_2,x_2)*(180/math.pi) + 90])
+                if can_pass.count(len(can_pass) - 1) == 1:
+                    safe_angles.append([math.atan2(point_groups[can_pass[len(can_pass)-2]][-1][1],point_groups[can_pass[len(can_pass)-2]][-1][0])*(180/math.pi) + 90,math.atan2(-1.5,0)*(180/math.pi) + 90])
+            else:
+                safe_angles.append([0,180])
+            safe_angles.sort()
+            self.get_logger().info(
+                "safe_angles: {0}\n###############\n".format(
+                    safe_angles,
+                    ))    
+            
         
-        idle_angle = 90
-        if 0 < idle_angle <= 30:
-            self.set_motors(70,100)
-        elif 30 < idle_angle <= 60:
-            self.set_motors(80,100)
-        elif 60 < idle_angle <= 80:
-            self.set_motors(90,100)
-        elif 80 < idle_angle <= 90:
-            self.set_motors(95,100)
-        elif 90 < idle_angle <= 100:
-            self.set_motors(100,95)
-        elif 100 < idle_angle <= 120:
-            self.set_motors(100,90)
-        elif 120 < idle_angle <= 150:
-            self.set_motors(100,80)
-        elif 150 < idle_angle <= 180:
-            self.set_motors(100,70)
+            idle_angle = 90
+            if 0 < idle_angle <= 30:
+                self.kit.servo[0].angle = 70
+                self.kit.servo[1].angle = 100
+            elif 30 < idle_angle <= 60:
+                self.kit.servo[0].angle = 80
+                self.kit.servo[1].angle = 100
+            elif 60 < idle_angle <= 80:
+                self.kit.servo[0].angle = 90
+                self.kit.servo[1].angle = 100
+            elif 80 < idle_angle <= 90:
+                self.kit.servo[0].angle = 95
+                self.kit.servo[1].angle = 100
+            elif 90 < idle_angle <= 100:
+                self.kit.servo[0].angle = 100
+                self.kit.servo[1].angle = 95
+            elif 100 < idle_angle <= 120:
+                self.kit.servo[0].angle = 100
+                self.kit.servo[1].angle = 90
+            elif 120 < idle_angle <= 150:
+                self.kit.servo[0].angle = 100
+                self.kit.servo[1].angle = 80
+            elif 150 < idle_angle <= 180:
+                self.kit.servo[0].angle = 100
+                self.kit.servo[1].angle = 70
                               
         # # 그룹화
         # # point_groups = [] # 최종 점들 그룹
@@ -283,7 +376,7 @@ class MechaAutoshipExampleNode(Node):
                 self.set_pixel(0,254,0)
             elif self.data["Shape"] == "triangle":
                 self.set_pixel(0,0,254)
-            
+       
 			
 				
     def set_motors(self, bldc_pwr, servo_deg):
