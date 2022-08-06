@@ -10,6 +10,7 @@ from std_msgs.msg import String, UInt8
 import numpy as np
 import math
 import cv2
+import adafruit_pca9685
 
 from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus, PointCloud, LaserScan
 from mecha_autoship_interfaces.srv import Battery, Actuator, Color
@@ -22,20 +23,26 @@ def map(x, input_min, input_max, output_min, output_max):
         input_max - input_min
     ) + output_min
     return int(output_min if res < output_min else res)
+ 
+  
+i2c_bus0 = (busio.I2C(board.SCL_1, board.SDA_1))
+kit = ServoKit(channels=16,i2c=i2c_bus0)     
+pca = adafruit_pca9685.PCA9685(i2c_bus0)
+pca.frequency = 75
 
+# kit.servo[0].set_pulse_width_range(1100, 1900) # servo 0 - bldc motor
+# kit.servo[1].set_pulse_width_range(1100, 1900) # servo 1 - bldc motor
+time.sleep(1)
+kit.servo[0].angle = 100 # 
+kit.servo[1].angle = 100 #  
+time.sleep(3)
 
 class MechaAutoshipExampleNode(Node):
     def __init__(self):
         super().__init__("mecha_autoship_example_node")
         self.get_logger().info("mecha_autoship_example_node Start")
         # ser = serial.Serial(port = "/dev/ttyACM0", baudrate = 38400, timeout = 0.1)    
-        i2c_bus0 = (busio.I2C(board.SCL_1, board.SDA_1))
-        self.kit = ServoKit(channels=16, i2c=i2c_bus0)
-        self.kit.servo[0].set_pulse_width_range(1100, 1900) # servo 0 - bldc motor
-        self.kit.servo[1].set_pulse_width_range(1100, 1900) # servo 1 - bldc motor
-        time.sleep(1)
-        # self.kit.servo[0].angle = 90 # 
-        # self.kit.servo[1].angle = 90 # 
+        
         
         self.data = {
             "IMU": Imu(),
@@ -141,6 +148,8 @@ class MechaAutoshipExampleNode(Node):
         self.data["LiDAR"] = data
         
     def risk_calculator_lidar_data_callback(self):
+        kit.servo[0].angle = 130 # 
+        kit.servo[1].angle = 130 # 
         point_groups = []
         points_tmp = []
         x_group = []
@@ -183,15 +192,15 @@ class MechaAutoshipExampleNode(Node):
                         
                 
             length = []                            
-            for i in range(len(point_groups)):
+            for i in range(len(point_groups) - 1):
                  length.append([math.sqrt(math.pow((point_groups[i][-1][0] - point_groups[i+1][0][0]),2) + math.pow((point_groups[i][-1][1] - point_groups[i+1][0][1]),2)),i])                
-            self.get_logger().info(
-                "length: {0}\n\n\n\n".format(
-                    length,
-                    ))     
+            # self.get_logger().info(
+                # "length: {0}\n".format(
+                    # length,
+                    # ))     
         
             can_pass = []
-            for i in range(len(length)-1):
+            for i in range(len(length)):
                 if length[i][0] > 0.9:
                     can_pass.append(length[i][1])           # group index 
             # self.get_logger().info(
@@ -211,8 +220,8 @@ class MechaAutoshipExampleNode(Node):
                     y1 = point_groups[can_pass[i]][-1][1]
                     y2 = point_groups[can_pass[i+1]][0][1]
                     self.get_logger().info(
-                      "x1: {0}\t y1: {1}\t x2: {2}\t y2: {3}\t".format(
-                      x1,x2,y1,y2,
+                      "x1: {0}\t y1: {1}\n x2: {2}\t y2: {3}\n len : {4}".format(
+                      x1,x2,y1,y2,len(can_pass)
                     ))
                     # x_1 = x1 + (0.35 / length[can_pass[i]][0]) * (x2 - x1)
                     # y_1 = y1 + (0.35 / length[can_pass[i]][0]) * (y2 - y1)
